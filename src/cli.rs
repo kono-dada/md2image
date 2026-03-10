@@ -12,8 +12,22 @@ pub struct Cli {
     #[arg(value_name = "INPUT")]
     pub input: Option<PathBuf>,
 
-    #[arg(short, long, value_name = "PATH")]
-    pub output: PathBuf,
+    #[arg(
+        short,
+        long,
+        value_name = "PATH",
+        required_unless_present = "stdout",
+        conflicts_with = "stdout"
+    )]
+    pub output: Option<PathBuf>,
+
+    #[arg(
+        long,
+        required_unless_present = "output",
+        conflicts_with = "output",
+        help = "Write the PNG bytes to stdout instead of a file"
+    )]
+    pub stdout: bool,
 
     #[arg(long, default_value_t = 960, value_name = "PX")]
     pub width: u32,

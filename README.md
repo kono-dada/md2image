@@ -7,6 +7,8 @@
 ```bash
 md2image input.md -o out.png
 cat input.md | md2image -o out.png
+md2image input.md --stdout > out.png
+cat input.md | md2image --stdout | your-shortcuts-command
 md2image --width 1200 input.md -o out.png
 md2image --width 960 --scale 2 input.md -o out@2x.png
 md2image --width 960 --scale 2 --supersample 2 input.md -o out@2x.png
@@ -17,7 +19,8 @@ md2image --browser "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome
 ## 参数
 
 - `INPUT`：可选。传入时从文件读取，不读取 stdin。
-- `-o, --output <PATH>`：必填，输出 PNG 路径。
+- `-o, --output <PATH>`：与 `--stdout` 二选一，输出 PNG 到文件。
+- `--stdout`：与 `--output` 二选一，把 PNG 二进制直接写到标准输出，适合管道给 macOS 快捷指令之类的后续处理。
 - `--width <PX>`：可选，默认 `960`，表示页面的 CSS 排版宽度。
 - `--scale <MULTIPLIER>`：可选，默认 `1.0`，在排版宽度不变的前提下增加最终输出像素数。例如 `--width 960 --scale 2` 会输出约 `1920px` 宽的 PNG。
 - `--supersample <MULTIPLIER>`：可选，默认 `1.0`，在 `scale` 基础上再提高内部渲染倍率，然后缩回目标输出尺寸，用于进一步改善边缘和文字平滑度。

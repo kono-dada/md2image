@@ -48,6 +48,9 @@ pub enum AppError {
         source: std::io::Error,
     },
 
+    #[error("failed to write PNG to stdout: {0}")]
+    WriteStdout(#[source] std::io::Error),
+
     #[error("failed to render markdown: {0}")]
     Render(String),
 

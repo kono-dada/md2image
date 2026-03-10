@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::Write;
+use std::io::{self, Write};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -50,7 +50,7 @@ pub fn run(cli: Cli) -> Result<()> {
     record_timing(&mut timings, "render png", step_started);
 
     let step_started = Instant::now();
-    write_output(&cli.output, &png)
+    write_destination(&cli, &png)
         .inspect(|_| record_timing(&mut timings, "write output", step_started))?;
 
     if cli.timing {
@@ -61,6 +61,15 @@ pub fn run(cli: Cli) -> Result<()> {
 }
 
 fn validate_cli(cli: &Cli) -> Result<()> {
+    match (&cli.output, cli.stdout) {
+        (Some(_), false) | (None, true) => {}
+        _ => {
+            return Err(AppError::Usage {
+                message: "pass exactly one of `--output <PATH>` or `--stdout`.".to_string(),
+            });
+        }
+    }
+
     if cli.theme != "default" {
         return Err(AppError::UnsupportedTheme {
             theme: cli.theme.clone(),
@@ -87,6 +96,16 @@ fn validate_cli(cli: &Cli) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn write_destination(cli: &Cli, png: &[u8]) -> Result<()> {
+    match (&cli.output, cli.stdout) {
+        (Some(path), false) => write_output(path, png),
+        (None, true) => write_stdout(png),
+        _ => Err(AppError::Usage {
+            message: "pass exactly one of `--output <PATH>` or `--stdout`.".to_string(),
+        }),
+    }
 }
 
 fn write_output(path: &Path, png: &[u8]) -> Result<()> {
@@ -142,6 +161,12 @@ fn write_output(path: &Path, png: &[u8]) -> Result<()> {
             }
         }
     }
+}
+
+fn write_stdout(png: &[u8]) -> Result<()> {
+    let mut stdout = io::stdout().lock();
+    stdout.write_all(png).map_err(AppError::WriteStdout)?;
+    stdout.flush().map_err(AppError::WriteStdout)
 }
 
 fn record_timing(

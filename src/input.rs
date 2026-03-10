@@ -34,7 +34,7 @@ fn read_stdin_if_available() -> Result<String> {
 fn no_input_error() -> AppError {
     AppError::Usage {
         message:
-            "no input provided. Pass `INPUT` or pipe Markdown into stdin.\n\nUsage: md2image [INPUT] -o <PATH>"
+            "no input provided. Pass `INPUT` or pipe Markdown into stdin.\n\nUsage: md2image [INPUT] (--output <PATH> | --stdout)"
                 .to_string(),
     }
 }
