@@ -174,7 +174,7 @@ impl<'a> EventParser<'a> {
                 }
                 Event::Start(Tag::Item) => {
                     self.next();
-                    let item_blocks = self.parse_blocks_until(|end| matches!(end, TagEnd::Item));
+                    let item_blocks = self.parse_list_item();
                     items.push(item_blocks);
                 }
                 _ => {
@@ -214,67 +214,167 @@ impl<'a> EventParser<'a> {
         while let Some(event) = self.next() {
             match event {
                 Event::End(tag) if tag == end_tag => break,
-                Event::Text(text) => inlines.push(Inline::Text(text.into_string())),
-                Event::Code(code) => inlines.push(Inline::Code(code.into_string())),
-                Event::SoftBreak => inlines.push(Inline::SoftBreak),
-                Event::HardBreak => inlines.push(Inline::HardBreak),
-                Event::InlineMath(text) | Event::DisplayMath(text) => {
-                    inlines.push(Inline::Text(text.into_string()))
-                }
-                Event::Html(text) | Event::InlineHtml(text) => {
-                    inlines.push(Inline::Text(text.into_string()))
-                }
-                Event::FootnoteReference(text) => inlines.push(Inline::Text(text.into_string())),
-                Event::TaskListMarker(checked) => {
-                    let marker = if checked { "[x]" } else { "[ ]" };
-                    inlines.push(Inline::Text(marker.to_string()));
-                }
-                Event::Start(Tag::Emphasis) => inlines.push(Inline::Emphasis(normalize_inlines(
-                    self.parse_inlines_until(TagEnd::Emphasis),
-                ))),
-                Event::Start(Tag::Strong) => inlines.push(Inline::Strong(normalize_inlines(
-                    self.parse_inlines_until(TagEnd::Strong),
-                ))),
-                Event::Start(Tag::Link { dest_url, .. }) => {
-                    let text = normalize_inlines(self.parse_inlines_until(TagEnd::Link));
-                    inlines.push(Inline::Link {
-                        text,
-                        destination: dest_url.into_string(),
-                    });
-                }
-                Event::Start(Tag::Image { .. }) => {
-                    self.skip_until(TagEnd::Image);
-                }
-                Event::Start(Tag::HtmlBlock) => {
-                    let html = self.collect_raw_text_until(TagEnd::HtmlBlock);
-                    if !html.is_empty() {
-                        inlines.push(Inline::Text(html));
-                    }
-                }
-                Event::Start(Tag::Paragraph)
-                | Event::Start(Tag::Heading { .. })
-                | Event::Start(Tag::BlockQuote(_))
-                | Event::Start(Tag::CodeBlock(_))
-                | Event::Start(Tag::List(_))
-                | Event::Start(Tag::Item)
-                | Event::Start(Tag::FootnoteDefinition(_))
-                | Event::Start(Tag::DefinitionList)
-                | Event::Start(Tag::DefinitionListTitle)
-                | Event::Start(Tag::DefinitionListDefinition)
-                | Event::Start(Tag::Table(_))
-                | Event::Start(Tag::TableHead)
-                | Event::Start(Tag::TableRow)
-                | Event::Start(Tag::TableCell)
-                | Event::Start(Tag::Strikethrough)
-                | Event::Start(Tag::Superscript)
-                | Event::Start(Tag::Subscript)
-                | Event::Start(Tag::MetadataBlock(_))
-                | Event::Rule
-                | Event::End(_) => {}
+                other => self.push_inline_from_event(&mut inlines, other),
             }
         }
 
         inlines
+    }
+
+    fn parse_list_item(&mut self) -> Vec<Block> {
+        let mut blocks = Vec::new();
+        let mut pending_inlines = Vec::new();
+
+        while let Some(event) = self.peek().cloned() {
+            match event {
+                Event::End(TagEnd::Item) => {
+                    self.next();
+                    self.flush_paragraph(&mut blocks, &mut pending_inlines);
+                    break;
+                }
+                Event::Start(Tag::Paragraph) => {
+                    self.next();
+                    self.flush_paragraph(&mut blocks, &mut pending_inlines);
+                    let content = normalize_inlines(self.parse_inlines_until(TagEnd::Paragraph));
+                    if !content.is_empty() {
+                        blocks.push(Block::Paragraph(content));
+                    }
+                }
+                Event::Start(Tag::Heading { level, .. }) => {
+                    self.next();
+                    self.flush_paragraph(&mut blocks, &mut pending_inlines);
+                    let content = normalize_inlines(self.parse_inlines_until(TagEnd::Heading(level)));
+                    blocks.push(Block::Heading {
+                        level: heading_level(level),
+                        content,
+                    });
+                }
+                Event::Start(Tag::BlockQuote(kind)) => {
+                    self.next();
+                    self.flush_paragraph(&mut blocks, &mut pending_inlines);
+                    blocks.push(Block::BlockQuote(self.parse_blocks_until(
+                        |end| matches!(end, TagEnd::BlockQuote(end_kind) if *end_kind == kind),
+                    )));
+                }
+                Event::Start(Tag::List(start)) => {
+                    self.next();
+                    self.flush_paragraph(&mut blocks, &mut pending_inlines);
+                    blocks.push(Block::List(self.parse_list(start)));
+                }
+                Event::Start(Tag::CodeBlock(kind)) => {
+                    self.next();
+                    self.flush_paragraph(&mut blocks, &mut pending_inlines);
+                    blocks.push(self.parse_code_block(kind));
+                }
+                Event::Rule => {
+                    self.next();
+                    self.flush_paragraph(&mut blocks, &mut pending_inlines);
+                    blocks.push(Block::ThematicBreak);
+                }
+                Event::Start(Tag::HtmlBlock) => {
+                    self.next();
+                    self.flush_paragraph(&mut blocks, &mut pending_inlines);
+                    let html = self.collect_raw_text_until(TagEnd::HtmlBlock);
+                    if !html.is_empty() {
+                        blocks.push(Block::Paragraph(vec![Inline::Text(html)]));
+                    }
+                }
+                Event::Text(_)
+                | Event::Code(_)
+                | Event::SoftBreak
+                | Event::HardBreak
+                | Event::InlineMath(_)
+                | Event::DisplayMath(_)
+                | Event::Html(_)
+                | Event::InlineHtml(_)
+                | Event::FootnoteReference(_)
+                | Event::TaskListMarker(_)
+                | Event::Start(Tag::Emphasis)
+                | Event::Start(Tag::Strong)
+                | Event::Start(Tag::Link { .. })
+                | Event::Start(Tag::Image { .. }) => {
+                    let event = self.next().expect("peeked event should exist");
+                    self.push_inline_from_event(&mut pending_inlines, event);
+                }
+                _ => {
+                    self.next();
+                }
+            }
+        }
+
+        blocks
+    }
+
+    fn flush_paragraph(&self, blocks: &mut Vec<Block>, pending_inlines: &mut Vec<Inline>) {
+        if pending_inlines.is_empty() {
+            return;
+        }
+
+        blocks.push(Block::Paragraph(normalize_inlines(std::mem::take(
+            pending_inlines,
+        ))));
+    }
+
+    fn push_inline_from_event(&mut self, inlines: &mut Vec<Inline>, event: Event<'a>) {
+        match event {
+            Event::Text(text) => inlines.push(Inline::Text(text.into_string())),
+            Event::Code(code) => inlines.push(Inline::Code(code.into_string())),
+            Event::SoftBreak => inlines.push(Inline::SoftBreak),
+            Event::HardBreak => inlines.push(Inline::HardBreak),
+            Event::InlineMath(text) | Event::DisplayMath(text) => {
+                inlines.push(Inline::Text(text.into_string()))
+            }
+            Event::Html(text) | Event::InlineHtml(text) => {
+                inlines.push(Inline::Text(text.into_string()))
+            }
+            Event::FootnoteReference(text) => inlines.push(Inline::Text(text.into_string())),
+            Event::TaskListMarker(checked) => {
+                let marker = if checked { "[x]" } else { "[ ]" };
+                inlines.push(Inline::Text(marker.to_string()));
+            }
+            Event::Start(Tag::Emphasis) => inlines.push(Inline::Emphasis(normalize_inlines(
+                self.parse_inlines_until(TagEnd::Emphasis),
+            ))),
+            Event::Start(Tag::Strong) => inlines.push(Inline::Strong(normalize_inlines(
+                self.parse_inlines_until(TagEnd::Strong),
+            ))),
+            Event::Start(Tag::Link { dest_url, .. }) => {
+                let text = normalize_inlines(self.parse_inlines_until(TagEnd::Link));
+                inlines.push(Inline::Link {
+                    text,
+                    destination: dest_url.into_string(),
+                });
+            }
+            Event::Start(Tag::Image { .. }) => {
+                self.skip_until(TagEnd::Image);
+            }
+            Event::Start(Tag::HtmlBlock) => {
+                let html = self.collect_raw_text_until(TagEnd::HtmlBlock);
+                if !html.is_empty() {
+                    inlines.push(Inline::Text(html));
+                }
+            }
+            Event::Start(Tag::Paragraph)
+            | Event::Start(Tag::Heading { .. })
+            | Event::Start(Tag::BlockQuote(_))
+            | Event::Start(Tag::CodeBlock(_))
+            | Event::Start(Tag::List(_))
+            | Event::Start(Tag::Item)
+            | Event::Start(Tag::FootnoteDefinition(_))
+            | Event::Start(Tag::DefinitionList)
+            | Event::Start(Tag::DefinitionListTitle)
+            | Event::Start(Tag::DefinitionListDefinition)
+            | Event::Start(Tag::Table(_))
+            | Event::Start(Tag::TableHead)
+            | Event::Start(Tag::TableRow)
+            | Event::Start(Tag::TableCell)
+            | Event::Start(Tag::Strikethrough)
+            | Event::Start(Tag::Superscript)
+            | Event::Start(Tag::Subscript)
+            | Event::Start(Tag::MetadataBlock(_))
+            | Event::Rule
+            | Event::End(_) => {}
+        }
     }
 
     fn collect_raw_text_until(&mut self, end_tag: TagEnd) -> String {
@@ -375,7 +475,7 @@ fn heading_level(level: HeadingLevel) -> u8 {
 
 #[cfg(test)]
 mod tests {
-    use super::{Block, Inline, parse};
+    use super::{Block, Inline, ListBlock, parse};
 
     #[test]
     fn parses_basic_blocks_and_inlines() {
@@ -404,6 +504,31 @@ mod tests {
         assert_eq!(
             document.blocks[1],
             Block::Paragraph(vec![Inline::Text("<div>unsafe</div>".to_string())])
+        );
+    }
+
+    #[test]
+    fn keeps_tight_list_item_inline_code_in_a_single_paragraph() {
+        let document = parse(
+            "- `--scale <MULTIPLIER>`：可选，默认 `1.0`，例如 `--width 960 --scale 2` 会输出约 `1920px` 宽的 PNG。",
+        );
+
+        assert_eq!(
+            document.blocks[0],
+            Block::List(ListBlock {
+                ordered: false,
+                start: None,
+                items: vec![vec![Block::Paragraph(vec![
+                    Inline::Code("--scale <MULTIPLIER>".to_string()),
+                    Inline::Text("：可选，默认 ".to_string()),
+                    Inline::Code("1.0".to_string()),
+                    Inline::Text("，例如 ".to_string()),
+                    Inline::Code("--width 960 --scale 2".to_string()),
+                    Inline::Text(" 会输出约 ".to_string()),
+                    Inline::Code("1920px".to_string()),
+                    Inline::Text(" 宽的 PNG。".to_string()),
+                ])]],
+            })
         );
     }
 }

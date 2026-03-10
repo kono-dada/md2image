@@ -246,7 +246,7 @@ fn render_inlines(inlines: &[Inline]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use crate::markdown::{Block, Document, Inline, ListBlock};
+    use crate::markdown::{Block, Document, Inline, ListBlock, parse};
 
     #[test]
     fn builds_stable_html() {
@@ -273,5 +273,21 @@ mod tests {
         assert!(html.contains("<h1>Title</h1>"));
         assert!(html.contains("<strong>bold</strong>"));
         assert!(html.contains("<ul>"));
+    }
+
+    #[test]
+    fn keeps_tight_list_item_inline_code_in_one_html_paragraph() {
+        let document = parse(
+            "- `--scale <MULTIPLIER>`：可选，默认 `1.0`，例如 `--width 960 --scale 2` 会输出约 `1920px` 宽的 PNG。",
+        );
+
+        let html = super::build_html(&document, 960, "default");
+        assert!(html.contains(
+            "<li><p><code>--scale &lt;MULTIPLIER&gt;</code>：可选，默认 <code>1.0</code>"
+        ));
+        assert!(html.contains(
+            "<code>--width 960 --scale 2</code> 会输出约 <code>1920px</code> 宽的 PNG。</p></li>"
+        ));
+        assert!(!html.contains("</p><p>"));
     }
 }
