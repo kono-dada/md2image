@@ -171,6 +171,50 @@ fn renders_png_to_stdout() {
     );
 }
 
+#[test]
+fn renders_markdown_with_math() {
+    let Some(browser_path) = browser_path_for_test() else {
+        eprintln!("skipping browser-dependent CLI test: no local browser found");
+        return;
+    };
+
+    let temp = tempdir().unwrap();
+    let output = temp.path().join("math.png");
+
+    cargo_bin_cmd!("md2image")
+        .timeout(Duration::from_secs(30))
+        .env("MD2IMAGE_BROWSER", &browser_path)
+        .arg("tests/fixtures/math.md")
+        .arg("-o")
+        .arg(&output)
+        .assert()
+        .success();
+
+    assert!(output.exists());
+}
+
+#[test]
+fn keeps_rendering_when_math_is_invalid() {
+    let Some(browser_path) = browser_path_for_test() else {
+        eprintln!("skipping browser-dependent CLI test: no local browser found");
+        return;
+    };
+
+    let temp = tempdir().unwrap();
+    let output = temp.path().join("invalid.png");
+
+    cargo_bin_cmd!("md2image")
+        .timeout(Duration::from_secs(30))
+        .env("MD2IMAGE_BROWSER", &browser_path)
+        .arg("tests/fixtures/invalid_math.md")
+        .arg("-o")
+        .arg(&output)
+        .assert()
+        .success();
+
+    assert!(output.exists());
+}
+
 fn browser_path_for_test() -> Option<std::path::PathBuf> {
     resolve_browser_path(None).ok()
 }

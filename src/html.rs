@@ -1,8 +1,35 @@
 use html_escape::encode_text;
 
+use crate::katex;
 use crate::markdown::{Block, Document, Inline, ListBlock};
 
 const BODY_MAX_WIDTH: u32 = 760;
+const MATH_BOOTSTRAP_SCRIPT: &str = r#"
+      window.__md2imageMathStatus = { done: false, ok: true, error: "" };
+      (() => {
+        const status = window.__md2imageMathStatus;
+        const summarize = value => value.replace(/\s+/g, " ").trim().slice(0, 120);
+
+        try {
+          for (const element of document.querySelectorAll("[data-md2image-math]")) {
+            const expression = element.textContent || "";
+            const displayMode = element.getAttribute("data-md2image-math") === "display";
+            element.textContent = "";
+            katex.render(expression, element, { displayMode, throwOnError: false });
+            element.setAttribute("data-md2image-math-rendered", "true");
+          }
+
+          status.done = true;
+        } catch (error) {
+          const message = error && error.message ? error.message : String(error);
+          const failedNode = document.querySelector("[data-md2image-math]:not([data-md2image-math-rendered])");
+          const expression = failedNode ? summarize(failedNode.textContent || "") : "";
+          status.ok = false;
+          status.done = true;
+          status.error = expression ? `${expression}: ${message}` : message;
+        }
+      })();
+"#;
 
 pub fn build_html(document: &Document, width: u32, theme: &str) -> String {
     let content = render_blocks(&document.blocks);
@@ -15,6 +42,8 @@ pub fn build_html(document: &Document, width: u32, theme: &str) -> String {
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>md2image</title>
+    <link rel="stylesheet" href="{katex_stylesheet_path}">
+    <script src="{katex_script_path}"></script>
     <style>
       :root {{
         color-scheme: light;
@@ -139,15 +168,37 @@ pub fn build_html(document: &Document, width: u32, theme: &str) -> String {
       em {{
         font-style: italic;
       }}
+
+      .md2image-math-inline .katex {{
+        font-size: 1em;
+      }}
+
+      .md2image-math-display {{
+        display: block;
+        margin: 0 0 1.1rem;
+        overflow-x: auto;
+        overflow-y: hidden;
+        padding: 0.2rem 0;
+      }}
+
+      .md2image-math-display .katex-display {{
+        margin: 0;
+      }}
     </style>
   </head>
   <body data-theme="{theme}">
     <main class="page">
       {content}
     </main>
+    <script>
+{math_bootstrap_script}
+    </script>
   </body>
 </html>
-"#
+"#,
+        katex_stylesheet_path = katex::STYLESHEET_PATH,
+        katex_script_path = katex::SCRIPT_PATH,
+        math_bootstrap_script = MATH_BOOTSTRAP_SCRIPT,
     )
 }
 
@@ -162,6 +213,7 @@ fn render_blocks(blocks: &[Block]) -> String {
             Block::Paragraph(content) => {
                 html.push_str(&format!("<p>{}</p>", render_inlines(content)));
             }
+            Block::DisplayMath(expression) => html.push_str(&render_display_math(expression)),
             Block::BlockQuote(children) => {
                 html.push_str("<blockquote>");
                 html.push_str(&render_blocks(children));
@@ -214,6 +266,14 @@ fn render_inlines(inlines: &[Inline]) -> String {
     for inline in inlines {
         match inline {
             Inline::Text(text) => html.push_str(&encode_text(text)),
+            Inline::Math(expression) => html.push_str(&format!(
+                "<span class=\"md2image-math-inline\" data-md2image-math=\"inline\">{}</span>",
+                encode_text(expression)
+            )),
+            Inline::DisplayMath(expression) => html.push_str(&format!(
+                "<span class=\"md2image-math-inline\" data-md2image-math=\"display\">{}</span>",
+                encode_text(expression.trim())
+            )),
             Inline::Strong(children) => {
                 html.push_str("<strong>");
                 html.push_str(&render_inlines(children));
@@ -244,6 +304,13 @@ fn render_inlines(inlines: &[Inline]) -> String {
     html
 }
 
+fn render_display_math(expression: &str) -> String {
+    format!(
+        "<div class=\"md2image-math-display\" data-md2image-math=\"display\">{}</div>",
+        encode_text(expression)
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use crate::markdown::{Block, Document, Inline, ListBlock, parse};
@@ -260,6 +327,7 @@ mod tests {
                     Inline::Text("Text with ".into()),
                     Inline::Strong(vec![Inline::Text("bold".into())]),
                 ]),
+                Block::DisplayMath("E = mc^2".into()),
                 Block::List(ListBlock {
                     ordered: false,
                     start: None,
@@ -270,8 +338,11 @@ mod tests {
 
         let html = super::build_html(&document, 960, "default");
         assert!(html.contains("class=\"page\""));
+        assert!(html.contains("katex.min.css"));
+        assert!(html.contains("window.__md2imageMathStatus"));
         assert!(html.contains("<h1>Title</h1>"));
         assert!(html.contains("<strong>bold</strong>"));
+        assert!(html.contains("data-md2image-math=\"display\""));
         assert!(html.contains("<ul>"));
     }
 
@@ -289,5 +360,25 @@ mod tests {
             "<code>--width 960 --scale 2</code> 会输出约 <code>1920px</code> 宽的 PNG。</p></li>"
         ));
         assert!(!html.contains("</p><p>"));
+    }
+
+    #[test]
+    fn renders_inline_math_and_bootstrap_script() {
+        let document = parse("Inline $x^2$ formula.");
+
+        let html = super::build_html(&document, 960, "default");
+        assert!(html.contains("window.__md2imageMathStatus"));
+        assert!(html.contains("data-md2image-math=\"inline\">x^2</span>"));
+    }
+
+    #[test]
+    fn renders_display_math_outside_paragraph_tags() {
+        let document = parse("$$\nE = mc^2\n$$\n");
+
+        let html = super::build_html(&document, 960, "default");
+        assert!(html.contains(
+            "<div class=\"md2image-math-display\" data-md2image-math=\"display\">E = mc^2</div>"
+        ));
+        assert!(!html.contains("<p><div"));
     }
 }

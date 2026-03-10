@@ -1,4 +1,4 @@
-use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Parser, Tag, TagEnd};
+use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Document {
@@ -12,6 +12,7 @@ pub enum Block {
         content: Vec<Inline>,
     },
     Paragraph(Vec<Inline>),
+    DisplayMath(String),
     BlockQuote(Vec<Block>),
     List(ListBlock),
     CodeBlock {
@@ -31,6 +32,8 @@ pub struct ListBlock {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Inline {
     Text(String),
+    Math(String),
+    DisplayMath(String),
     Strong(Vec<Inline>),
     Emphasis(Vec<Inline>),
     Code(String),
@@ -43,7 +46,7 @@ pub enum Inline {
 }
 
 pub fn parse(markdown: &str) -> Document {
-    let events: Vec<Event<'_>> = Parser::new(markdown).collect();
+    let events: Vec<Event<'_>> = Parser::new_ext(markdown, Options::ENABLE_MATH).collect();
     let mut parser = EventParser::new(events);
     parser.parse_document()
 }
@@ -90,11 +93,7 @@ impl<'a> EventParser<'a> {
         match self.next()? {
             Event::Start(Tag::Paragraph) => {
                 let content = self.parse_inlines_until(TagEnd::Paragraph);
-                if content.is_empty() {
-                    None
-                } else {
-                    Some(Block::Paragraph(normalize_inlines(content)))
-                }
+                finish_paragraph_content(content)
             }
             Event::Start(Tag::Heading { level, .. }) => {
                 let content = self.parse_inlines_until(TagEnd::Heading(level));
@@ -110,6 +109,7 @@ impl<'a> EventParser<'a> {
             }
             Event::Start(Tag::List(start)) => Some(Block::List(self.parse_list(start))),
             Event::Start(Tag::CodeBlock(kind)) => Some(self.parse_code_block(kind)),
+            Event::DisplayMath(text) => Some(Block::DisplayMath(text.into_string())),
             Event::Rule => Some(Block::ThematicBreak),
             Event::Html(text) => Some(Block::Paragraph(vec![Inline::Text(text.into_string())])),
             Event::InlineHtml(text) => {
@@ -119,9 +119,7 @@ impl<'a> EventParser<'a> {
             Event::Code(code) => Some(Block::Paragraph(vec![Inline::Code(code.into_string())])),
             Event::SoftBreak => Some(Block::Paragraph(vec![Inline::SoftBreak])),
             Event::HardBreak => Some(Block::Paragraph(vec![Inline::HardBreak])),
-            Event::InlineMath(text) | Event::DisplayMath(text) => {
-                Some(Block::Paragraph(vec![Inline::Text(text.into_string())]))
-            }
+            Event::InlineMath(text) => Some(Block::Paragraph(vec![Inline::Math(text.into_string())])),
             Event::FootnoteReference(text) => {
                 Some(Block::Paragraph(vec![Inline::Text(text.into_string())]))
             }
@@ -235,9 +233,9 @@ impl<'a> EventParser<'a> {
                 Event::Start(Tag::Paragraph) => {
                     self.next();
                     self.flush_paragraph(&mut blocks, &mut pending_inlines);
-                    let content = normalize_inlines(self.parse_inlines_until(TagEnd::Paragraph));
-                    if !content.is_empty() {
-                        blocks.push(Block::Paragraph(content));
+                    let content = self.parse_inlines_until(TagEnd::Paragraph);
+                    if let Some(block) = finish_paragraph_content(content) {
+                        blocks.push(block);
                     }
                 }
                 Event::Start(Tag::Heading { level, .. }) => {
@@ -266,6 +264,13 @@ impl<'a> EventParser<'a> {
                     self.flush_paragraph(&mut blocks, &mut pending_inlines);
                     blocks.push(self.parse_code_block(kind));
                 }
+                Event::DisplayMath(_) => {
+                    let event = self.next().expect("peeked event should exist");
+                    self.flush_paragraph(&mut blocks, &mut pending_inlines);
+                    if let Event::DisplayMath(text) = event {
+                        blocks.push(Block::DisplayMath(text.into_string()));
+                    }
+                }
                 Event::Rule => {
                     self.next();
                     self.flush_paragraph(&mut blocks, &mut pending_inlines);
@@ -284,7 +289,6 @@ impl<'a> EventParser<'a> {
                 | Event::SoftBreak
                 | Event::HardBreak
                 | Event::InlineMath(_)
-                | Event::DisplayMath(_)
                 | Event::Html(_)
                 | Event::InlineHtml(_)
                 | Event::FootnoteReference(_)
@@ -310,20 +314,19 @@ impl<'a> EventParser<'a> {
             return;
         }
 
-        blocks.push(Block::Paragraph(normalize_inlines(std::mem::take(
-            pending_inlines,
-        ))));
+        if let Some(block) = finish_paragraph_content(std::mem::take(pending_inlines)) {
+            blocks.push(block);
+        }
     }
 
     fn push_inline_from_event(&mut self, inlines: &mut Vec<Inline>, event: Event<'a>) {
         match event {
             Event::Text(text) => inlines.push(Inline::Text(text.into_string())),
+            Event::InlineMath(text) => inlines.push(Inline::Math(text.into_string())),
+            Event::DisplayMath(text) => inlines.push(Inline::DisplayMath(text.into_string())),
             Event::Code(code) => inlines.push(Inline::Code(code.into_string())),
             Event::SoftBreak => inlines.push(Inline::SoftBreak),
             Event::HardBreak => inlines.push(Inline::HardBreak),
-            Event::InlineMath(text) | Event::DisplayMath(text) => {
-                inlines.push(Inline::Text(text.into_string()))
-            }
             Event::Html(text) | Event::InlineHtml(text) => {
                 inlines.push(Inline::Text(text.into_string()))
             }
@@ -462,6 +465,26 @@ fn normalize_inlines(inlines: Vec<Inline>) -> Vec<Inline> {
     normalized
 }
 
+fn finish_paragraph_content(content: Vec<Inline>) -> Option<Block> {
+    let content = normalize_inlines(content);
+
+    match content.as_slice() {
+        [] => None,
+        [Inline::DisplayMath(expression)] => Some(Block::DisplayMath(expression.trim().to_string())),
+        _ => Some(Block::Paragraph(convert_display_math_inlines(content))),
+    }
+}
+
+fn convert_display_math_inlines(inlines: Vec<Inline>) -> Vec<Inline> {
+    inlines
+        .into_iter()
+        .map(|inline| match inline {
+            Inline::DisplayMath(expression) => Inline::Math(expression.trim().to_string()),
+            other => other,
+        })
+        .collect()
+}
+
 fn heading_level(level: HeadingLevel) -> u8 {
     match level {
         HeadingLevel::H1 => 1,
@@ -528,6 +551,42 @@ mod tests {
                     Inline::Code("1920px".to_string()),
                     Inline::Text(" 宽的 PNG。".to_string()),
                 ])]],
+            })
+        );
+    }
+
+    #[test]
+    fn parses_inline_and_display_math() {
+        let document = parse("Inline $x^2$ math.\n\n$$\nE = mc^2\n$$\n");
+
+        assert_eq!(
+            document.blocks[0],
+            Block::Paragraph(vec![
+                Inline::Text("Inline ".to_string()),
+                Inline::Math("x^2".to_string()),
+                Inline::Text(" math.".to_string()),
+            ])
+        );
+        assert_eq!(
+            document.blocks[1],
+            Block::DisplayMath("E = mc^2".to_string())
+        );
+    }
+
+    #[test]
+    fn keeps_display_math_as_a_separate_list_item_block() {
+        let document = parse("- before\n\n  $$\n  a^2 + b^2 = c^2\n  $$\n\n  after\n");
+
+        assert_eq!(
+            document.blocks[0],
+            Block::List(ListBlock {
+                ordered: false,
+                start: None,
+                items: vec![vec![
+                    Block::Paragraph(vec![Inline::Text("before".to_string())]),
+                    Block::DisplayMath("a^2 + b^2 = c^2".to_string()),
+                    Block::Paragraph(vec![Inline::Text("after".to_string())]),
+                ]],
             })
         );
     }

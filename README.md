@@ -44,11 +44,18 @@ md2image --browser "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome
 - 引用、无序列表、有序列表
 - 行内代码、代码块、分隔线
 - 链接文本
+- 行内公式、公式块（KaTeX，本地离线资源）
+
+## 数学公式
+
+- 默认支持标准行内公式和块级公式语法。
+- 渲染使用内置 KaTeX 资源，不依赖 CDN 或额外系统安装。
+- 若公式语法非法或包含 KaTeX 不支持的命令，命令仍会继续输出 PNG，公式区域退化为 KaTeX 的可读错误样式。
 
 ## 当前限制
 
 - 不渲染 Markdown 图片
-- 不支持表格、任务列表、公式块
+- 不支持表格、任务列表
 - 不提供自定义 CSS、语法高亮、纯 Rust 渲染后端
 
 仓库内部已经预留渲染抽象，未来可以补纯 Rust 后端。

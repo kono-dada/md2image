@@ -54,6 +54,9 @@ pub enum AppError {
     #[error("failed to render markdown: {0}")]
     Render(String),
 
+    #[error("failed to render LaTeX formula: {0}")]
+    MathRender(String),
+
     #[error(
         "could not find Chrome/Chromium. Install Chrome/Chromium, or pass `--browser <PATH>`, or set `MD2IMAGE_BROWSER`."
     )]
