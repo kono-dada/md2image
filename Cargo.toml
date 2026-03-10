@@ -1,0 +1,26 @@
+[package]
+name = "md2image"
+version = "0.1.0"
+edition = "2024"
+description = "Render Markdown to a single PNG using headless Chrome or Chromium."
+license = "MIT"
+
+[lib]
+doctest = false
+
+[dependencies]
+clap = { version = "4.5.32", features = ["derive"] }
+headless_chrome = "1.0.21"
+html-escape = "0.2.13"
+image = { version = "0.25.6", default-features = false, features = ["png"] }
+pulldown-cmark = "0.13.0"
+tempfile = "3.18.0"
+thiserror = "2.0.12"
+url = "2.5.4"
+which = "8.0.0"
+
+[dev-dependencies]
+assert_cmd = "2.0.16"
+png = "0.18.0"
+predicates = "3.1.3"
+tempfile = "3.18.0"
