@@ -120,7 +120,9 @@ impl<'a> EventParser<'a> {
             Event::Code(code) => Some(Block::Paragraph(vec![Inline::Code(code.into_string())])),
             Event::SoftBreak => Some(Block::Paragraph(vec![Inline::SoftBreak])),
             Event::HardBreak => Some(Block::Paragraph(vec![Inline::HardBreak])),
-            Event::InlineMath(text) => Some(Block::Paragraph(vec![Inline::Math(text.into_string())])),
+            Event::InlineMath(text) => {
+                Some(Block::Paragraph(vec![Inline::Math(text.into_string())]))
+            }
             Event::FootnoteReference(text) => {
                 Some(Block::Paragraph(vec![Inline::Text(text.into_string())]))
             }
@@ -242,7 +244,8 @@ impl<'a> EventParser<'a> {
                 Event::Start(Tag::Heading { level, .. }) => {
                     self.next();
                     self.flush_paragraph(&mut blocks, &mut pending_inlines);
-                    let content = normalize_inlines(self.parse_inlines_until(TagEnd::Heading(level)));
+                    let content =
+                        normalize_inlines(self.parse_inlines_until(TagEnd::Heading(level)));
                     blocks.push(Block::Heading {
                         level: heading_level(level),
                         content,
@@ -502,10 +505,7 @@ fn preprocess_display_math_shorthand(markdown: &str) -> String {
             continue;
         };
 
-        if output
-            .last()
-            .is_some_and(|line| !line.trim().is_empty())
-        {
+        if output.last().is_some_and(|line| !line.trim().is_empty()) {
             output.push(String::new());
         }
         output.push("$$".to_string());
@@ -579,7 +579,9 @@ fn finish_paragraph_content(content: Vec<Inline>) -> Option<Block> {
 
     match content.as_slice() {
         [] => None,
-        [Inline::DisplayMath(expression)] => Some(Block::DisplayMath(expression.trim().to_string())),
+        [Inline::DisplayMath(expression)] => {
+            Some(Block::DisplayMath(expression.trim().to_string()))
+        }
         _ => Some(Block::Paragraph(convert_display_math_inlines(content))),
     }
 }
@@ -703,8 +705,7 @@ fn is_allowed_math_shorthand_char(ch: char) -> bool {
         || ch.is_whitespace()
         || matches!(
             ch,
-            '\\'
-                | '+'
+            '\\' | '+'
                 | '-'
                 | '*'
                 | '/'
@@ -740,8 +741,7 @@ fn is_math_letter(ch: char) -> bool {
     ch.is_ascii_alphabetic()
         || matches!(
             ch,
-            'α'
-                | 'β'
+            'α' | 'β'
                 | 'γ'
                 | 'δ'
                 | 'ε'
@@ -781,8 +781,7 @@ fn is_math_signal_char(ch: char) -> bool {
     ch.is_ascii_digit()
         || matches!(
             ch,
-            '\\'
-                | '+'
+            '\\' | '+'
                 | '-'
                 | '*'
                 | '/'
@@ -810,8 +809,7 @@ fn is_math_signal_char(ch: char) -> bool {
 fn is_common_math_symbol(ch: char) -> bool {
     matches!(
         ch,
-        '±'
-            | '×'
+        '±' | '×'
             | '÷'
             | '·'
             | '∗'

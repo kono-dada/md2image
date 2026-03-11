@@ -58,6 +58,42 @@ fn renders_fixture_to_png_when_browser_is_available() {
 }
 
 #[test]
+fn short_markdown_does_not_expand_to_viewport_height() {
+    let browser_path = match resolve_browser_path(None) {
+        Ok(path) => path,
+        Err(md2image::AppError::BrowserNotFound) => {
+            eprintln!("skipping browser integration test: no local browser found");
+            return;
+        }
+        Err(error) => panic!("unexpected browser resolution error: {error}"),
+    };
+
+    let markdown = "> [!NOTE] 这里是提示信息";
+    let document = parse(markdown);
+    let html = build_html(&document, 960, "default");
+    let renderer = ChromiumRenderer;
+    let png = renderer
+        .render(
+            &html,
+            &RenderOptions {
+                width: 960,
+                scale: 1.0,
+                supersample: 1.0,
+                timing: false,
+                browser_path,
+            },
+        )
+        .expect("short markdown PNG render should succeed");
+
+    let (width, height) = png_dimensions(&png);
+    assert_eq!(width, 960);
+    assert!(
+        height < 700,
+        "short content should not be stretched to viewport height: got {height}px"
+    );
+}
+
+#[test]
 fn scale_increases_output_dimensions() {
     let browser_path = match resolve_browser_path(None) {
         Ok(path) => path,

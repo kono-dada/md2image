@@ -150,8 +150,7 @@ fn write_temp_html(dir: &Path, html: &str) -> Result<PathBuf> {
 }
 
 fn wait_for_layout(tab: &Arc<headless_chrome::Tab>) -> Result<()> {
-    tab.wait_for_element("body")
-        .map_err(map_browser_error)?;
+    tab.wait_for_element("body").map_err(map_browser_error)?;
 
     tab.evaluate(
         r#"
@@ -197,14 +196,23 @@ fn measure_content_height(tab: &Arc<headless_chrome::Tab>) -> Result<u32> {
     let result = tab
         .evaluate(
             r#"
-                Math.ceil(
-                    Math.max(
-                        document.documentElement.scrollHeight,
-                        document.body ? document.body.scrollHeight : 0,
-                        document.documentElement.offsetHeight,
-                        document.body ? document.body.offsetHeight : 0
-                    )
-                )
+                (() => {
+                    const body = document.body;
+
+                    if (!body) {
+                        return 1;
+                    }
+
+                    const bodyStyle = getComputedStyle(body);
+                    const paddingTop = parseFloat(bodyStyle.paddingTop || "0") || 0;
+                    const paddingBottom = parseFloat(bodyStyle.paddingBottom || "0") || 0;
+                    const contentBottom = Array.from(body.children).reduce((maxBottom, element) => {
+                        const rect = element.getBoundingClientRect();
+                        return Math.max(maxBottom, rect.bottom + window.scrollY);
+                    }, paddingTop);
+
+                    return Math.ceil(Math.max(1, contentBottom + paddingBottom));
+                })()
             "#,
             false,
         )

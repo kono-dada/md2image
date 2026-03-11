@@ -20,7 +20,10 @@ pub fn stage_assets(root: &Path) -> Result<()> {
         }
 
         fs::write(&path, bytes).map_err(|error| {
-            AppError::Render(format!("failed to write KaTeX asset {}: {error}", path.display()))
+            AppError::Render(format!(
+                "failed to write KaTeX asset {}: {error}",
+                path.display()
+            ))
         })?;
     }
 
