@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use md2image::browser::resolve_browser_path;
 use md2image::html::build_html;
@@ -10,6 +10,17 @@ fn png_dimensions(bytes: &[u8]) -> (u32, u32) {
     let reader = decoder.read_info().expect("valid PNG");
     let info = reader.info();
     (info.width, info.height)
+}
+
+fn browser_path_or_skip() -> Option<PathBuf> {
+    match resolve_browser_path(None) {
+        Ok(path) => Some(path),
+        Err(md2image::AppError::BrowserNotFound) => {
+            eprintln!("skipping browser integration test: no local browser found");
+            None
+        }
+        Err(error) => panic!("unexpected browser resolution error: {error}"),
+    }
 }
 
 #[test]
@@ -59,13 +70,8 @@ fn renders_fixture_to_png_when_browser_is_available() {
 
 #[test]
 fn short_markdown_does_not_expand_to_viewport_height() {
-    let browser_path = match resolve_browser_path(None) {
-        Ok(path) => path,
-        Err(md2image::AppError::BrowserNotFound) => {
-            eprintln!("skipping browser integration test: no local browser found");
-            return;
-        }
-        Err(error) => panic!("unexpected browser resolution error: {error}"),
+    let Some(browser_path) = browser_path_or_skip() else {
+        return;
     };
 
     let markdown = "> [!NOTE] 这里是提示信息";
@@ -90,6 +96,84 @@ fn short_markdown_does_not_expand_to_viewport_height() {
     assert!(
         height < 700,
         "short content should not be stretched to viewport height: got {height}px"
+    );
+}
+
+#[test]
+fn very_tall_markdown_is_rendered_without_truncation() {
+    let Some(browser_path) = browser_path_or_skip() else {
+        return;
+    };
+
+    let markdown = (0..400)
+        .map(|index| {
+            format!(
+                "第{}段：这是一段专门用于制造超长页面的测试文本，它会在较窄的版心里自动换行，从而把整张图片拉得足够高，用来验证分段截图和最终拼接不会截断底部内容。",
+                index + 1
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let document = parse(&markdown);
+    let html = build_html(&document, 400, "default");
+    let renderer = ChromiumRenderer;
+    let png = renderer
+        .render(
+            &html,
+            &RenderOptions {
+                width: 400,
+                scale: 1.0,
+                supersample: 1.0,
+                timing: false,
+                browser_path,
+            },
+        )
+        .expect("very tall markdown PNG render should succeed");
+
+    let (width, height) = png_dimensions(&png);
+    assert_eq!(width, 400);
+    assert!(
+        height > 60_000,
+        "very tall markdown should extend beyond the old truncation ceiling: got {height}px"
+    );
+}
+
+#[test]
+fn very_tall_markdown_with_supersample_renders_successfully() {
+    let Some(browser_path) = browser_path_or_skip() else {
+        return;
+    };
+
+    let markdown = (0..220)
+        .map(|index| {
+            format!(
+                "第{}段：这是一段用于验证超长内容在 supersample 模式下也能稳定渲染的测试文本。它会重复很多次，确保渲染流程必须走切片、缩放和拼接，而不是一次性整图处理。",
+                index + 1
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let document = parse(&markdown);
+    let html = build_html(&document, 360, "default");
+    let renderer = ChromiumRenderer;
+    let png = renderer
+        .render(
+            &html,
+            &RenderOptions {
+                width: 360,
+                scale: 1.0,
+                supersample: 2.0,
+                timing: false,
+                browser_path,
+            },
+        )
+        .expect("very tall markdown with supersample should render");
+
+    let (width, height) = png_dimensions(&png);
+    assert_eq!(width, 360);
+    assert!(
+        height > 10_000,
+        "expected a tall rendered image, got {height}px"
     );
 }
 
