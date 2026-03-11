@@ -46,9 +46,10 @@ pub enum Inline {
 }
 
 pub fn parse(markdown: &str) -> Document {
-    let events: Vec<Event<'_>> = Parser::new_ext(markdown, Options::ENABLE_MATH).collect();
+    let markdown = preprocess_display_math_shorthand(markdown);
+    let events: Vec<Event<'_>> = Parser::new_ext(&markdown, Options::ENABLE_MATH).collect();
     let mut parser = EventParser::new(events);
-    parser.parse_document()
+    normalize_document(parser.parse_document())
 }
 
 struct EventParser<'a> {
@@ -465,6 +466,114 @@ fn normalize_inlines(inlines: Vec<Inline>) -> Vec<Inline> {
     normalized
 }
 
+fn normalize_document(document: Document) -> Document {
+    Document {
+        blocks: normalize_blocks(document.blocks),
+    }
+}
+
+fn preprocess_display_math_shorthand(markdown: &str) -> String {
+    let lines: Vec<&str> = markdown.lines().collect();
+    let mut output = Vec::with_capacity(lines.len());
+    let mut index = 0usize;
+
+    while index < lines.len() {
+        if lines[index].trim() != "[" {
+            output.push(lines[index].to_string());
+            index += 1;
+            continue;
+        }
+
+        let mut end = index + 1;
+        while end < lines.len() && lines[end].trim() != "]" {
+            end += 1;
+        }
+
+        if end >= lines.len() {
+            output.push(lines[index].to_string());
+            index += 1;
+            continue;
+        }
+
+        let content = lines[index + 1..end].join("\n");
+        let Some(expression) = math_shorthand_content(&content) else {
+            output.push(lines[index].to_string());
+            index += 1;
+            continue;
+        };
+
+        if output
+            .last()
+            .is_some_and(|line| !line.trim().is_empty())
+        {
+            output.push(String::new());
+        }
+        output.push("$$".to_string());
+        output.push(expression);
+        output.push("$$".to_string());
+        if end + 1 < lines.len() && !lines[end + 1].trim().is_empty() {
+            output.push(String::new());
+        }
+        index = end + 1;
+    }
+
+    output.join("\n")
+}
+
+fn normalize_blocks(blocks: Vec<Block>) -> Vec<Block> {
+    blocks.into_iter().map(normalize_block).collect()
+}
+
+fn normalize_block(block: Block) -> Block {
+    match block {
+        Block::Heading { level, content } => Block::Heading {
+            level,
+            content: normalize_inline_math_shorthand(content),
+        },
+        Block::Paragraph(content) => normalize_paragraph_block(content),
+        Block::DisplayMath(expression) => Block::DisplayMath(expression),
+        Block::BlockQuote(children) => Block::BlockQuote(normalize_blocks(children)),
+        Block::List(list) => Block::List(ListBlock {
+            ordered: list.ordered,
+            start: list.start,
+            items: list.items.into_iter().map(normalize_blocks).collect(),
+        }),
+        Block::CodeBlock { language, code } => Block::CodeBlock { language, code },
+        Block::ThematicBreak => Block::ThematicBreak,
+    }
+}
+
+fn normalize_paragraph_block(content: Vec<Inline>) -> Block {
+    if let Some(expression) = shorthand_display_math(&content) {
+        Block::DisplayMath(expression)
+    } else {
+        Block::Paragraph(normalize_inline_math_shorthand(content))
+    }
+}
+
+fn normalize_inline_math_shorthand(inlines: Vec<Inline>) -> Vec<Inline> {
+    let mut normalized = Vec::new();
+
+    for inline in inlines {
+        match inline {
+            Inline::Text(text) => normalized.extend(split_inline_math_shorthand(&text)),
+            Inline::Strong(children) => {
+                normalized.push(Inline::Strong(normalize_inline_math_shorthand(children)));
+            }
+            Inline::Emphasis(children) => {
+                normalized.push(Inline::Emphasis(normalize_inline_math_shorthand(children)));
+            }
+            Inline::Link { text, destination } => normalized.push(Inline::Link {
+                text: normalize_inline_math_shorthand(text),
+                destination,
+            }),
+            other => normalized.push(other),
+        }
+    }
+
+    normalize_inlines(normalized)
+}
+
 fn finish_paragraph_content(content: Vec<Inline>) -> Option<Block> {
     let content = normalize_inlines(content);
 
@@ -483,6 +592,253 @@ fn convert_display_math_inlines(inlines: Vec<Inline>) -> Vec<Inline> {
             other => other,
         })
         .collect()
+}
+
+fn shorthand_display_math(inlines: &[Inline]) -> Option<String> {
+    let mut text = String::new();
+
+    for inline in inlines {
+        match inline {
+            Inline::Text(value) => text.push_str(value),
+            Inline::SoftBreak | Inline::HardBreak => text.push('\n'),
+            _ => return None,
+        }
+    }
+
+    bracket_math_content(&text, '[', ']')
+}
+
+fn split_inline_math_shorthand(text: &str) -> Vec<Inline> {
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    let mut result = Vec::new();
+    let mut cursor = 0usize;
+    let mut index = 0usize;
+
+    while index < chars.len() {
+        if chars[index].1 != '(' {
+            index += 1;
+            continue;
+        }
+
+        let start = chars[index].0;
+        let Some((end, next_index)) = find_matching_paren(&chars, index) else {
+            index += 1;
+            continue;
+        };
+
+        let inner = &text[start + 1..end];
+        let Some(expression) = parenthetical_math_content(inner) else {
+            index += 1;
+            continue;
+        };
+
+        if cursor < start {
+            result.push(Inline::Text(text[cursor..start].to_string()));
+        }
+        result.push(Inline::Math(expression));
+        cursor = end + 1;
+        index = next_index;
+    }
+
+    if result.is_empty() {
+        return vec![Inline::Text(text.to_string())];
+    }
+
+    if cursor < text.len() {
+        result.push(Inline::Text(text[cursor..].to_string()));
+    }
+
+    result
+}
+
+fn find_matching_paren(chars: &[(usize, char)], start_index: usize) -> Option<(usize, usize)> {
+    let mut depth = 0usize;
+
+    for (index, (byte_index, ch)) in chars.iter().enumerate().skip(start_index) {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return Some((*byte_index, index + 1));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    None
+}
+
+fn parenthetical_math_content(content: &str) -> Option<String> {
+    math_shorthand_content(content)
+}
+
+fn bracket_math_content(content: &str, open: char, close: char) -> Option<String> {
+    let trimmed = content.trim();
+    let inner = trimmed.strip_prefix(open)?.strip_suffix(close)?;
+    math_shorthand_content(inner)
+}
+
+fn math_shorthand_content(content: &str) -> Option<String> {
+    let trimmed = content.trim();
+    if trimmed.is_empty() || !trimmed.chars().all(is_allowed_math_shorthand_char) {
+        return None;
+    }
+
+    let all_letters = trimmed.chars().all(is_math_letter);
+    let short_word = all_letters && trimmed.chars().count() <= 3;
+    let has_math_signal = trimmed.chars().any(is_math_signal_char);
+
+    if has_math_signal || short_word {
+        Some(trimmed.to_string())
+    } else {
+        None
+    }
+}
+
+fn is_allowed_math_shorthand_char(ch: char) -> bool {
+    is_math_letter(ch)
+        || ch.is_ascii_digit()
+        || ch.is_whitespace()
+        || matches!(
+            ch,
+            '\\'
+                | '+'
+                | '-'
+                | '*'
+                | '/'
+                | '='
+                | '^'
+                | '_'
+                | '{'
+                | '}'
+                | '['
+                | ']'
+                | '('
+                | ')'
+                | '<'
+                | '>'
+                | '|'
+                | '&'
+                | '%'
+                | '!'
+                | '?'
+                | ':'
+                | ';'
+                | ','
+                | '.'
+                | '\''
+                | '"'
+                | '#'
+                | '~'
+        )
+        || is_common_math_symbol(ch)
+}
+
+fn is_math_letter(ch: char) -> bool {
+    ch.is_ascii_alphabetic()
+        || matches!(
+            ch,
+            'α'
+                | 'β'
+                | 'γ'
+                | 'δ'
+                | 'ε'
+                | 'ζ'
+                | 'η'
+                | 'θ'
+                | 'ι'
+                | 'κ'
+                | 'λ'
+                | 'μ'
+                | 'ν'
+                | 'ξ'
+                | 'ο'
+                | 'π'
+                | 'ρ'
+                | 'σ'
+                | 'τ'
+                | 'υ'
+                | 'φ'
+                | 'χ'
+                | 'ψ'
+                | 'ω'
+                | 'Γ'
+                | 'Δ'
+                | 'Θ'
+                | 'Λ'
+                | 'Ξ'
+                | 'Π'
+                | 'Σ'
+                | 'Φ'
+                | 'Ψ'
+                | 'Ω'
+        )
+}
+
+fn is_math_signal_char(ch: char) -> bool {
+    ch.is_ascii_digit()
+        || matches!(
+            ch,
+            '\\'
+                | '+'
+                | '-'
+                | '*'
+                | '/'
+                | '='
+                | '^'
+                | '_'
+                | '{'
+                | '}'
+                | '['
+                | ']'
+                | '<'
+                | '>'
+                | '|'
+                | '&'
+                | '%'
+                | ','
+                | '.'
+                | ':'
+                | ';'
+        )
+        || is_common_math_symbol(ch)
+        || !ch.is_ascii()
+}
+
+fn is_common_math_symbol(ch: char) -> bool {
+    matches!(
+        ch,
+        '±'
+            | '×'
+            | '÷'
+            | '·'
+            | '∗'
+            | '∑'
+            | '∏'
+            | '∫'
+            | '√'
+            | '∞'
+            | '≈'
+            | '≠'
+            | '≤'
+            | '≥'
+            | '∂'
+            | '∇'
+            | '∈'
+            | '∉'
+            | '⊂'
+            | '⊆'
+            | '⊄'
+            | '∪'
+            | '∩'
+            | '→'
+            | '←'
+            | '↔'
+            | '⇒'
+            | '⇔'
+    )
 }
 
 fn heading_level(level: HeadingLevel) -> u8 {
@@ -588,6 +944,93 @@ mod tests {
                     Block::Paragraph(vec![Inline::Text("after".to_string())]),
                 ]],
             })
+        );
+    }
+
+    #[test]
+    fn converts_parenthetical_math_shorthand_into_inline_math() {
+        let document = parse("Inline (x^2 + y^2 = z^2) shorthand.");
+
+        assert_eq!(
+            document.blocks[0],
+            Block::Paragraph(vec![
+                Inline::Text("Inline ".to_string()),
+                Inline::Math("x^2 + y^2 = z^2".to_string()),
+                Inline::Text(" shorthand.".to_string()),
+            ])
+        );
+    }
+
+    #[test]
+    fn converts_bracket_math_shorthand_into_display_math() {
+        let document = parse("[\\int_0^1 x^2 dx = \\frac{1}{3}]");
+
+        assert_eq!(
+            document.blocks[0],
+            Block::DisplayMath("\\int_0^1 x^2 dx = \\frac{1}{3}".to_string())
+        );
+    }
+
+    #[test]
+    fn converts_multiline_bracket_math_shorthand_into_display_math() {
+        let document = parse("[\n\\langle q,\\nu_2(x)\\rangle = q(x,x).\n]");
+
+        assert_eq!(
+            document.blocks[0],
+            Block::DisplayMath("\\langle q,\\nu_2(x)\\rangle = q(x,x).".to_string())
+        );
+    }
+
+    #[test]
+    fn converts_standalone_bracket_block_between_paragraphs_into_display_math() {
+        let document = parse(
+            "若 (Q) 由矩阵 (S) 给出：\n[\nQ(x)=x^\\top Sx=0,\n]\n那么它的 (Q^\\vee) 活在对偶平面里。",
+        );
+
+        assert_eq!(
+            document.blocks[0],
+            Block::Paragraph(vec![
+                Inline::Text("若 ".to_string()),
+                Inline::Math("Q".to_string()),
+                Inline::Text(" 由矩阵 ".to_string()),
+                Inline::Math("S".to_string()),
+                Inline::Text(" 给出：".to_string()),
+            ])
+        );
+        assert_eq!(
+            document.blocks[1],
+            Block::DisplayMath("Q(x)=x^\\top Sx=0,".to_string())
+        );
+        assert_eq!(
+            document.blocks[2],
+            Block::Paragraph(vec![
+                Inline::Text("那么它的 ".to_string()),
+                Inline::Math("Q^\\vee".to_string()),
+                Inline::Text(" 活在对偶平面里。".to_string()),
+            ])
+        );
+    }
+
+    #[test]
+    fn keeps_normal_parenthetical_text_untouched() {
+        let document = parse("keep (hello world) as text");
+
+        assert_eq!(
+            document.blocks[0],
+            Block::Paragraph(vec![Inline::Text("keep (hello world) as text".to_string())])
+        );
+    }
+
+    #[test]
+    fn keeps_markdown_links_untouched() {
+        let document = parse("[docs](https://example.com)");
+
+        assert_eq!(
+            document.blocks[0],
+            Block::Paragraph(vec![Inline::Link {
+                text: vec![Inline::Text("docs".to_string())],
+                destination: "https://example.com".to_string(),
+            }])
         );
     }
 }

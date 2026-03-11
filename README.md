@@ -49,6 +49,7 @@ md2image --browser "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome
 ## 数学公式
 
 - 默认支持标准行内公式和块级公式语法。
+- 额外兼容一部分简写：当 `(...)` 或 `[...]` 内只包含字母、数字和常见数学符号时，会分别按行内公式和公式块处理。
 - 渲染使用内置 KaTeX 资源，不依赖 CDN 或额外系统安装。
 - 若公式语法非法或包含 KaTeX 不支持的命令，命令仍会继续输出 PNG，公式区域退化为 KaTeX 的可读错误样式。
 
