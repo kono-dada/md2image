@@ -31,7 +31,7 @@ pub enum AppError {
     #[error("failed to read markdown from stdin: {0}")]
     ReadStdin(#[source] std::io::Error),
 
-    #[error("unsupported theme `{theme}`. Only `default` is available in v1.")]
+    #[error("unsupported theme `{theme}`.")]
     UnsupportedTheme { theme: String },
 
     #[error("failed to create output directory {path}: {source}")]
@@ -53,9 +53,6 @@ pub enum AppError {
 
     #[error("failed to render markdown: {0}")]
     Render(String),
-
-    #[error("failed to render LaTeX formula: {0}")]
-    MathRender(String),
 
     #[error(
         "could not find Chrome/Chromium. Install Chrome/Chromium, or pass `--browser <PATH>`, or set `MD2IMAGE_BROWSER`."

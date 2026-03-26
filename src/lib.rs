@@ -4,7 +4,6 @@ pub mod cli;
 pub mod error;
 pub mod html;
 pub mod input;
-mod katex;
 pub mod markdown;
 pub mod render;
 

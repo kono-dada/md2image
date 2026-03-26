@@ -10,7 +10,7 @@ use crate::cli::Cli;
 use crate::error::{AppError, Result};
 use crate::html::build_html;
 use crate::input::read_markdown;
-use crate::markdown::parse;
+use crate::markdown::render_html;
 use crate::render::{ChromiumRenderer, RenderOptions, Renderer};
 
 pub fn run(cli: Cli) -> Result<()> {
@@ -28,11 +28,11 @@ pub fn run(cli: Cli) -> Result<()> {
     record_timing(&mut timings, "resolve browser", step_started);
 
     let step_started = Instant::now();
-    let document = parse(&markdown);
-    record_timing(&mut timings, "parse markdown", step_started);
+    let rendered_markdown = render_html(&markdown);
+    record_timing(&mut timings, "render markdown", step_started);
 
     let step_started = Instant::now();
-    let html = build_html(&document, cli.width, &cli.theme);
+    let html = build_html(&rendered_markdown, cli.width, &cli.theme)?;
     record_timing(&mut timings, "build html", step_started);
 
     let renderer = ChromiumRenderer;
@@ -69,13 +69,6 @@ fn validate_cli(cli: &Cli) -> Result<()> {
             });
         }
     }
-
-    if cli.theme != "default" {
-        return Err(AppError::UnsupportedTheme {
-            theme: cli.theme.clone(),
-        });
-    }
-
     if cli.width == 0 {
         return Err(AppError::Usage {
             message: "`--width` must be greater than 0.".to_string(),

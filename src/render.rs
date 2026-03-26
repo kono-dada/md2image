@@ -16,7 +16,6 @@ use tempfile::TempDir;
 use url::Url;
 
 use crate::error::{AppError, Result};
-use crate::katex;
 
 const MAX_CAPTURE_SLICE_PX_HEIGHT: u32 = 4_096;
 
@@ -37,7 +36,6 @@ pub struct ChromiumRenderer;
 impl Renderer for ChromiumRenderer {
     fn render(&self, html: &str, options: &RenderOptions) -> Result<Vec<u8>> {
         let temp_dir = TempDir::new().map_err(AppError::TempDir)?;
-        katex::stage_assets(temp_dir.path())?;
         let html_path = write_temp_html(temp_dir.path(), html)?;
         let file_url = Url::from_file_path(&html_path).map_err(|_| {
             AppError::Render(format!(
@@ -154,17 +152,13 @@ fn wait_for_layout(tab: &Arc<headless_chrome::Tab>) -> Result<()> {
     tab.evaluate(
         r#"
             new Promise((resolve, reject) => {
-                const deadline = Date.now() + 5000;
+                const deadline = Date.now() + 15000;
 
-                const waitForMath = () => {
-                    const status = window.__md2imageMathStatus;
+                const waitForPage = () => {
+                    const readyStateDone = document.readyState === "complete";
+                    const imagesReady = Array.from(document.images || []).every(image => image.complete);
 
-                    if (!status || status.done === true) {
-                        if (status && status.ok === false) {
-                            reject(new Error(`MD2IMAGE_MATH_ERROR:${status.error || "unknown KaTeX error"}`));
-                            return;
-                        }
-
+                    if (readyStateDone && imagesReady) {
                         Promise.resolve(document.fonts ? document.fonts.ready : null)
                             .then(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))))
                             .then(resolve, reject);
@@ -172,14 +166,15 @@ fn wait_for_layout(tab: &Arc<headless_chrome::Tab>) -> Result<()> {
                     }
 
                     if (Date.now() >= deadline) {
-                        reject(new Error("timed out waiting for KaTeX rendering"));
+                        Promise.resolve(document.fonts ? document.fonts.ready : null)
+                            .then(resolve, reject);
                         return;
                     }
 
-                    requestAnimationFrame(waitForMath);
+                    requestAnimationFrame(waitForPage);
                 };
 
-                waitForMath();
+                waitForPage();
             });
         "#,
         true,
@@ -413,18 +408,7 @@ fn scaled_coordinate(value: u32, multiplier: f64) -> Result<u32> {
 }
 
 fn map_browser_error(error: impl ToString) -> AppError {
-    const PREFIX: &str = "MD2IMAGE_MATH_ERROR:";
-
-    let message = error.to_string();
-    if let Some(start) = message.find(PREFIX) {
-        let detail = message[start + PREFIX.len()..]
-            .trim()
-            .trim_end_matches('}')
-            .trim();
-        return AppError::MathRender(detail.to_string());
-    }
-
-    AppError::Render(message)
+    AppError::Render(error.to_string())
 }
 
 fn log_timing(enabled: bool, label: &str, started_at: Instant) {

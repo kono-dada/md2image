@@ -11,7 +11,6 @@ doctest = false
 [dependencies]
 clap = { version = "4.5.32", features = ["derive"] }
 headless_chrome = "1.0.21"
-html-escape = "0.2.13"
 image = { version = "0.25.6", default-features = false, features = ["png"] }
 pulldown-cmark = "0.13.0"
 tempfile = "3.18.0"
